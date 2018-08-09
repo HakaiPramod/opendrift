@@ -14,6 +14,7 @@
 #
 # Copyright 2015, Knut-Frode Dagestad, MET Norway
 
+from builtins import range
 import os
 import logging
 from collections import OrderedDict
@@ -103,7 +104,7 @@ class Leeway(OpenDriftSimulation):
         objproptxt = objprop_file.readlines()
         objprop_file.close()
         self.leewayprop = OrderedDict({})
-        for i in xrange(len(objproptxt)//3+1):
+        for i in range(len(objproptxt)//3+1):
             # Stop at first blank line
             if not objproptxt[i*3].strip():
                 break
@@ -134,15 +135,29 @@ class Leeway(OpenDriftSimulation):
         super(Leeway, self).__init__(*args, **kwargs)
 
     def seed_elements(self, lon, lat, radius=0, number=1, time=None,
-                      objectType=1, cone=None):
+                      objectType=None, cone=None):
         """Seed particles in a cone-shaped area over a time period."""
         # All particles carry their own objectType (number),
         # but so far we only use one for each sim
         # objtype = np.ones(number)*objectType
         # Note: cone is not used, simply to provide same interface as others
 
-        logging.info('Seeding elements of object type %i: %s' %
-                     (objectType, self.leewayprop[objectType]['OBJKEY']))
+        if objectType is None:
+            object_name = self.get_config('seed:object_type')
+            # Get number from name
+            found = False
+            for objectType in range(1, len(self.leewayprop)+1):
+                if self.leewayprop[objectType]['OBJKEY'] == object_name or(
+                    self.leewayprop[objectType]['Description'] == object_name):
+                    found = True
+                    break
+            if found is False:
+                logging.info(self.list_configspec())
+                raise ValueError('Object %s not available' % objectType)
+
+        logging.info('Seeding elements of object type %i: %s (%s)' %
+                     (objectType, self.leewayprop[objectType]['OBJKEY'],
+                      self.leewayprop[objectType]['Description']))
 
         # Probability of jibing (4 % per hour)
         pjibe = 0.04
@@ -180,7 +195,7 @@ class Leeway(OpenDriftSimulation):
         dwstd = self.leewayprop[objectType]['DWSTD']
         rdw = np.zeros(number)
         epsdw = np.zeros(number)
-        for i in xrange(number):
+        for i in range(number):
             rdw[i] = np.random.randn(1)
             epsdw[i] = rdw[i]*dwstd
             # Avoid negative downwind slopes
@@ -246,7 +261,7 @@ class Leeway(OpenDriftSimulation):
             if substr is not None:
                 if substr.lower() not in description.lower() + objkey.lower():
                     continue
-            print '%i %s %s' % (i+1, objkey, description)
+            print('%i %s %s' % (i+1, objkey, description))
 
     def update(self):
         """Update positions and properties of leeway particles."""
@@ -306,7 +321,10 @@ class Leeway(OpenDriftSimulation):
             ' 3.00\n'  # OpenDrift version
             '# Object class id & name:\n'
             'objectClassId  objectClassName\n')
-        objtype = self.elements.objectType[0]
+        try:
+            objtype = self.elements.objectType[0]
+        except:
+            objtype = self.elements_deactivated.objectType[0]
         f.write(' %i\t%s\n' % (objtype,
                 self.leewayprop[objtype]['OBJKEY']))
         f.write(

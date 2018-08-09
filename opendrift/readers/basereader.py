@@ -14,6 +14,7 @@
 #
 # Copyright 2015, Knut-Frode Dagestad, MET Norway
 
+from future.utils import iteritems
 import sys
 import logging
 import copy
@@ -26,7 +27,7 @@ from scipy.interpolate import LinearNDInterpolator
 from scipy.ndimage import map_coordinates
 import numpy as np
 
-from interpolation import ReaderBlock
+from opendrift.readers.interpolation import ReaderBlock
 
 try:
     import pyproj  # Import pyproj
@@ -38,6 +39,11 @@ except:
         raise ImportError('pyproj needed for coordinate transformations,'
                           ' please install from '
                           'https://code.google.com/p/pyproj/')
+
+try:
+    basestring
+except NameError:
+    basestring = str
 
 # Som valid (but extreme) ranges for checking that values are reasonable
 standard_names = {
@@ -94,6 +100,8 @@ class BaseReader(object):
         'y_wind_10m': 'y_wind',
         'eastward_surface_stokes_drift': 'sea_surface_wave_stokes_drift_x_velocity',
         'northward_surface_stokes_drift': 'sea_surface_wave_stokes_drift_y_velocity',
+        'sea_water_x_velocity': 'x_sea_water_velocity',
+        'sea_water_y_velocity': 'y_sea_water_velocity',
         'eastward_sea_water_velocity': 'x_sea_water_velocity',
         'northward_sea_water_velocity': 'y_sea_water_velocity',
         'eastward_current_velocity': 'x_sea_water_velocity',
@@ -122,6 +130,8 @@ class BaseReader(object):
 
         self.always_valid = False  # Set to True if a single field should
                                    # be valid at all times
+
+        self.is_lazy = False  # Generally False
 
         # Set projection for coordinate transformations
         self.simulation_SRS = False  # Avoid unnecessary vector rotation
@@ -777,11 +787,11 @@ class BaseReader(object):
                 raise ValueError('Variable not available: ' + variable +
                                  '\nAvailable parameters are: ' +
                                  str(self.variables))
-        if self.start_time is not None and time < self.start_time:
+        if (self.start_time is not None and time < self.start_time) and self.always_valid is False:
             raise ValueError('Requested time (%s) is before first available '
                              'time (%s) of %s' % (time, self.start_time,
                                                   self.name))
-        if self.end_time is not None and time > self.end_time:
+        if (self.end_time is not None and time > self.end_time) and self.always_valid is False:
             raise ValueError('Requested time (%s) is after last available '
                              'time (%s) of %s' % (time, self.end_time,
                                                   self.name))
@@ -937,7 +947,7 @@ class BaseReader(object):
         '''Report the time spent on various tasks'''
         outStr = ''
         if hasattr(self, 'timing'):
-            for cat, time in self.timing.iteritems():
+            for cat, time in iteritems(self.timing):
                 time = str(time)[0:str(time).find('.') + 2]
                 outStr += '%10s  %s\n' % (time, cat)
         return outStr

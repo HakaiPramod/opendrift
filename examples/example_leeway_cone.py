@@ -15,6 +15,10 @@ reader_norkyst = reader_netCDF_CF_generic.Reader(lw.test_data_folder() +
     '16Nov2015_NorKyst_z_surface/norkyst800_subset_16Nov2015.nc')
 
 lw.add_reader([reader_norkyst, reader_arome])
+lw.fallback_values['x_sea_water_velocity'] = 0
+lw.fallback_values['y_sea_water_velocity'] = 0
+lw.fallback_values['x_wind'] = 0
+lw.fallback_values['y_wind'] = 0
 
 # Intermediate map resolution is sufficient for large scale
 lw.set_config('general:basemap_resolution', 'i')
@@ -31,9 +35,9 @@ lw.seed_elements(lon, lat, radius=[1000, 10000], number=5000,
 
 # Running model
 lw.run(steps=66*4, time_step=900)
-print lw
+print(lw)
 
 # Print and plot results
-print lw
+print(lw)
 lw.plot()
 lw.animation()

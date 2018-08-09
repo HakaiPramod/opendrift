@@ -14,6 +14,7 @@
 #
 # Copyright 2015, Knut-Frode Dagestad, MET Norway
 
+from io import open
 import os
 import numpy as np
 from datetime import datetime
@@ -22,8 +23,12 @@ import matplotlib.pyplot as plt
 
 from opendrift.models.basemodel import OpenDriftSimulation
 from opendrift.elements import LagrangianArray
-import noaa_oil_weathering as noaa
+import opendrift.models.noaa_oil_weathering as noaa
 
+try:
+    from itertools import izip as zip
+except ImportError:
+    pass
 
 # Defining the oil element properties
 class Oil(LagrangianArray):
@@ -43,9 +48,6 @@ class Oil(LagrangianArray):
         ('wind_drift_factor', {'dtype': np.float32,
                                'units': '%',
                                'default': 0.03}),
-        ('age_seconds', {'dtype': np.float32,
-                         'units': 's',
-                         'default': 0}),
         ('age_exposure_seconds', {'dtype': np.float32,
                                   'units': 's',
                                   'default': 0}),
@@ -132,6 +134,11 @@ class OpenOil(OpenDriftSimulation):
                       'SLEIPNER CONDENSATE, STATOIL',
                       'STATFJORD BLEND, STATOIL', 'VARG, STATOIL']
 
+    # Workaround as ADIOS oil library uses
+    # max water fraction of 0.9 for all crude oils
+    max_water_fraction  = {
+        'MARINE GAS OIL 500 ppm S 2017': 0.1}
+
 
     def __init__(self, weathering_model='default', *args, **kwargs):
 
@@ -163,7 +170,7 @@ class OpenOil(OpenDriftSimulation):
             # Read oil properties from file
             self.oiltype_file = os.path.dirname(os.path.realpath(__file__)) + \
                 '/oilprop.dat'
-            oilprop = open(self.oiltype_file)
+            oilprop = open(self.oiltype_file, 'r', encoding='utf-8')
             oiltypes = []
             linenumbers = []
             for i, line in enumerate(oilprop.readlines()):
@@ -178,8 +185,7 @@ class OpenOil(OpenDriftSimulation):
         self.oil_weathering_model = weathering_model
 
         # Update config with oiltypes 
-        # TODO: add unicode support
-        oiltypes = [a.encode('ascii','ignore') for a in self.oiltypes]
+        oiltypes = [str(a) for a in self.oiltypes]
         self._add_config('seed:oil_type', oiltypes,
                          'Oil type', overwrite=True)
 
@@ -317,7 +323,6 @@ class OpenOil(OpenDriftSimulation):
             #self.deactivate_elements(droplet_size < 5E-7, reason='dispersed')
 
     def oil_weathering(self):
-        self.elements.age_seconds += self.time_step.total_seconds()
         if self.time_step.days < 0:
             logging.debug('Skipping oil weathering for backwards run')
             return
@@ -488,6 +493,12 @@ class OpenOil(OpenDriftSimulation):
         emul_constant = self.oiltype.bullwinkle
         # max water content fraction - get from database
         Y_max = self.oiltype.get('emulsion_water_fraction_max')
+        if self.oil_name in self.max_water_fraction:
+            max_water_fraction = self.max_water_fraction[self.oil_name]
+            logging.debug('Overriding max water fraxtion with value %f instead of default %f'
+                          % (max_water_fraction, Y_max))
+            Y_max = max_water_fraction
+        # emulsion
         if Y_max <= 0:
             logging.debug('Oil does not emulsify, returning.')
             return
@@ -712,8 +723,7 @@ class OpenOil(OpenDriftSimulation):
             return
 
         if oiltype not in self.oiltypes:
-            raise ValueError('The following oiltypes are available: %s' %
-                             str(self.oiltypes))
+            raise ValueError('Oiltype %s is unknown. The following oiltypes are available: %s' % (oiltype, str(self.oiltypes)))
         indx = self.oiltypes.index(oiltype)
         linenumber = self.oiltypes_linenumbers[indx]
         oilfile = open(self.oiltype_file, 'r')
@@ -744,8 +754,8 @@ class OpenOil(OpenDriftSimulation):
             self.set_config('seed:oil_type', kwargs['oiltype'])
             del kwargs['oiltype']
         else:
-            logging.warning('Oil type not specified, using default: ' +
-                            self.get_config('seed:oil_type'))
+            logging.info('Oil type not specified, using default: ' +
+                         self.get_config('seed:oil_type'))
         self.set_oiltype(self.get_config('seed:oil_type'))
 
         if self.oil_weathering_model == 'noaa':
@@ -817,7 +827,7 @@ class OpenOil(OpenDriftSimulation):
             c = np.array(pos.split()).astype(np.float)
             lon = c[0::2]
             lat = c[1::2]
-            slicks.append(Polygon(zip(lon, lat)))
+            slicks.append(Polygon(list(zip(lon, lat))))
 
         # Find boundary and area of all patches
         lons = np.array([])
@@ -844,7 +854,7 @@ class OpenOil(OpenDriftSimulation):
             x, y = proj(lon, lat)
 
             area_of_polygon = 0.0
-            for i in xrange(-1, len(x)-1):
+            for i in range(-1, len(x)-1):
                 area_of_polygon += x[i] * (y[i+1] - y[i-1])
             area_of_polygon = abs(area_of_polygon) / 2.0
             slickarea = np.append(slickarea, area_of_polygon)  # in m2
@@ -877,3 +887,77 @@ class OpenOil(OpenDriftSimulation):
         kwargs['lon'] = lonpoints
         kwargs['lat'] = latpoints
         self.seed_elements(time=oil_time, **kwargs)
+
+    def seed_from_geotiff_thickness(self, filename, number=50000,
+                                    *args, **kwargs):
+        '''Seed from files as provided by Prof. Chuanmin Hu'''
+
+        import gdal
+        import ogr
+
+        if not 'time' is kwargs:
+            try:  # get time from filename
+                timestr = filename[-28:-13]
+                time = datetime.strptime(
+                        filename[-28:-13], '%Y%m%d.%H%M%S')
+                logging.info('Parsed time from filename: %s' % time)
+            except:
+                time = datetime.now()
+                logging.warning('Could not pase time from filename, '
+                                'using present time: %s' % time)
+
+        ds = gdal.Open(filename)
+        
+        srcband = ds.GetRasterBand(1)
+        data = srcband.ReadAsArray()
+
+        thickness_microns = [0.04, 0.44, 4.4, 16]  # NB: approximate
+        categories = [1, 2, 3, 4]  # categories
+
+        # Make memory raster bands for each category
+        memrastername = filename + '.mem'
+        memdriver = gdal.GetDriverByName('MEM')
+        mem_ds = memdriver.CreateCopy(memrastername, ds)
+        for cat in categories:
+            mem_ds.AddBand(gdal.GDT_Byte)
+            mem_band = mem_ds.GetRasterBand(cat)
+            mem_band.WriteArray(data==cat)
+
+        # Make memory polygons for each category
+        drv = ogr.GetDriverByName('MEMORY')
+        mem_vector_ds = [0]*len(categories)
+        mem_vector_layers = [0]*len(categories)
+        for cat in categories:
+            memshapename = filename + '%i.mem' % cat
+            mem_vector_ds[cat-1] = drv.CreateDataSource(memshapename)
+            mem_vector_layers[cat-1] = \
+                mem_vector_ds[cat-1].CreateLayer(
+                    'thickness%i' % cat, srs=None)
+            gdal.Polygonize(mem_ds.GetRasterBand(cat), None,
+                            mem_vector_layers[cat-1],
+                            -1, [], callback=None)
+
+        total_area = np.zeros(len(categories))
+        layers = [0]*len(categories)
+        for cat in categories:
+            memshapename = filename + '%i.shp' % cat
+            layers[cat-1] = mem_vector_layers[cat-1]
+            areas = np.zeros(layers[cat-1].GetFeatureCount())
+            for i, feature in enumerate(layers[cat-1]):
+                areas[i] = feature.GetGeometryRef().GetArea()
+            # Delete largest polygon, which is outer border
+            outer = np.where(areas==max(areas))[0]
+            areas[outer] = 0
+            total_area[cat-1] = np.sum(areas)
+            layers[cat-1].DeleteFeature(outer)
+            layers[cat-1].ResetReading()
+            
+        # Calculate how many elements to be seeded for each category
+        areas_weighted = total_area*thickness_microns
+        numbers = number*areas_weighted/np.sum(areas_weighted)
+        numbers = np.round(numbers).astype(int)
+
+        for i, num in enumerate(numbers):
+            self.seed_from_shapefile([mem_vector_layers[i]],
+                oil_film_thickness=thickness_microns[i]/1000000.,
+                number=num, time=time, *args, **kwargs)
