@@ -16,9 +16,16 @@
 
 import logging
 from bisect import bisect_left, bisect_right
+from datetime import datetime
 
 import numpy as np
 from netCDF4 import Dataset, MFDataset, num2date
+try:
+    import xarray as xr
+    has_xarray = True
+except:
+    has_xarray = False
+has_xarray = False  # Temporary disabled
 
 from opendrift.readers.basereader import BaseReader, vector_pairs_xy
 from opendrift.readers.roppy import depth
@@ -57,11 +64,11 @@ class Reader(BaseReader):
             'Vwind': 'y_wind'}
 
         # z-levels to which sigma-layers may be interpolated
-        self.zlevels = [
+        self.zlevels = np.array([
             0, -.5, -1, -3, -5, -10, -25, -50, -75, -100, -150, -200,
             -250, -300, -400, -500, -600, -700, -800, -900, -1000, -1500,
             -2000, -2500, -3000, -3500, -4000, -4500, -5000, -5500, -6000,
-            -6500, -7000, -7500, -8000]
+            -6500, -7000, -7500, -8000])
 
         filestr = str(filename)
         if name is None:
@@ -74,10 +81,16 @@ class Reader(BaseReader):
             logging.info('Opening dataset: ' + filestr)
             if ('*' in filestr) or ('?' in filestr) or ('[' in filestr):
                 logging.info('Opening files with MFDataset')
-                self.Dataset = MFDataset(filename)
+                if has_xarray is True:
+                    self.Dataset = xr.open_mfdataset(filename)
+                else:
+                    self.Dataset = MFDataset(filename)
             else:
                 logging.info('Opening file with Dataset')
-                self.Dataset = Dataset(filename, 'r')
+                if has_xarray is True:
+                    self.Dataset = xr.open_dataset(filename)
+                else:
+                    self.Dataset = Dataset(filename, 'r')
         except Exception as e:
             raise ValueError(e)
 
@@ -106,7 +119,10 @@ class Reader(BaseReader):
             try:
                 self.hc = self.Dataset.variables['hc'][:]
             except:
-                self.hc = self.Dataset.variables['hc'][0]
+                if has_xarray is True:
+                    self.hc = self.Dataset.variables['hc'].data  # scalar
+                else:
+                    self.hc = self.Dataset.variables['hc'][0]
 
             self.num_layers = len(self.sigma)
         else:
@@ -145,12 +161,18 @@ class Reader(BaseReader):
             ocean_time = self.Dataset.variables['ocean_time']
         except:
             ocean_time = self.Dataset.variables['time']
-        time_units = ocean_time.__dict__['units']
-        if time_units == 'second':
-            logging.info('Ocean time given as seconds relative to start '
-                         'Setting artifical start time of 1 Jan 2000.')
-            time_units = 'seconds since 2000-01-01 00:00:00'
-        self.times = num2date(ocean_time[:], time_units)
+        if has_xarray:
+            self.times = [datetime.utcfromtimestamp((OT -
+                          np.datetime64('1970-01-01T00:00:00Z')
+                            ) / np.timedelta64(1, 's'))
+                          for OT in ocean_time.data]
+        else:
+            time_units = ocean_time.__dict__['units']
+            if time_units == 'second':
+                logging.info('Ocean time given as seconds relative to start '
+                             'Setting artifical start time of 1 Jan 2000.')
+                time_units = 'seconds since 2000-01-01 00:00:00'
+            self.times = num2date(ocean_time[:], time_units)
         self.start_time = self.times[0]
         self.end_time = self.times[-1]
         if len(self.times) > 1:
@@ -160,13 +182,22 @@ class Reader(BaseReader):
 
         # x and y are rows and columns for unprojected datasets
         self.xmin = 0.
-        self.xmax = np.float(len(self.Dataset.dimensions['xi_rho'])) - 1
         self.delta_x = 1.
         self.ymin = 0.
-        self.ymax = np.float(len(self.Dataset.dimensions['eta_rho'])) - 1
         self.delta_y = 1.
+        if has_xarray:
+            self.xmax = self.Dataset['xi_rho'].shape[0] - 1.
+            self.ymax = self.Dataset['eta_rho'].shape[0] - 1.
+            self.lon = self.lon.data  # Extract, could be avoided downstream
+            self.lat = self.lat.data
+            self.sigma = self.sigma.data
+        else:
+            self.xmax = np.float(len(self.Dataset.dimensions['xi_rho'])) - 1
+            self.ymax = np.float(len(self.Dataset.dimensions['eta_rho'])) - 1
 
         self.name = 'roms native'
+
+        self.precalculate_s2z_coefficients = True
 
         # Find all variables having standard_name
         self.variables = []
@@ -233,8 +264,15 @@ class Reader(BaseReader):
                 logging.debug('Reading sea floor depth...')
                 self.sea_floor_depth_below_sea_level = \
                     self.Dataset.variables['h'][:]
-            indxgrid, indygrid = np.meshgrid(indx, indy)
-            H = self.sea_floor_depth_below_sea_level[indygrid, indxgrid]
+
+                Htot = self.sea_floor_depth_below_sea_level
+                self.z_rho_tot = depth.sdepth(Htot, self.hc, self.Cs_r)
+
+            if has_xarray is False:
+                indxgrid, indygrid = np.meshgrid(indx, indy)
+                H = self.sea_floor_depth_below_sea_level[indygrid, indxgrid]
+            else:
+                H = self.sea_floor_depth_below_sea_level[indy, indx]
             z_rho = depth.sdepth(H, self.hc, self.Cs_r)
             # Element indices must be relative to extracted subset
             indx_el = indx_el - indx.min()
@@ -266,23 +304,24 @@ class Reader(BaseReader):
                        self.ROMS_variable_mapping.items() if cf == par]
             var = self.Dataset.variables[varname[0]]
 
-            # Automatic masking may lead to trouble for ROMS files
-            # with valid_min/max, _Fill_value or missing_value
-            # https://github.com/Unidata/netcdf4-python/issues/703
-            var.set_auto_maskandscale(False)
+            if has_xarray is not True:
+                # Automatic masking may lead to trouble for ROMS files
+                # with valid_min/max, _Fill_value or missing_value
+                # https://github.com/Unidata/netcdf4-python/issues/703
+                var.set_auto_maskandscale(False)
 
-            try:
-                FillValue = getattr(var, '_FillValue')
-            except:
-                FillValue = None
-            try:
-                scale = getattr(var, 'scale_factor')
-            except:
-                scale = 1
-            try:
-                offset = getattr(var, 'add_offset')
-            except:
-                offset = 0
+                try:
+                    FillValue = getattr(var, '_FillValue')
+                except:
+                    FillValue = None
+                try:
+                    scale = getattr(var, 'scale_factor')
+                except:
+                    scale = 1
+                try:
+                    offset = getattr(var, 'add_offset')
+                except:
+                    offset = 0
 
             if var.ndim == 2:
                 variables[par] = var[indy, indx]
@@ -294,28 +333,93 @@ class Reader(BaseReader):
                 raise Exception('Wrong dimension of variable: ' +
                                 self.variable_mapping[par])
 
-			# Manual scaling, offsetting and masking due to issue with ROMS files
-            logging.debug('Manually masking %s, FillValue %s, scale %s, offset %s' % 
-                (par, FillValue, scale, offset))
-            if FillValue is not None:
-                if var.dtype != FillValue.dtype:
-                    mask = variables[par] == 0
-                    if not 'already_warned' in locals():
-                        logging.warning('Data type of variable (%s) and _FillValue (%s) is not the same. Masking 0-values instead' % (var.dtype, FillValue.dtype))
-                        already_warned = True
-                else:
-                    logging.warning('Masking ' + str(FillValue))
-                    mask = variables[par] == FillValue
-            variables[par] = variables[par]*scale + offset
-            if FillValue is not None:
-                variables[par][mask] = np.nan
+            if has_xarray is False:
+                # Manual scaling, offsetting and masking due to issue with ROMS files
+                logging.debug('Manually masking %s, FillValue %s, scale %s, offset %s' % 
+                    (par, FillValue, scale, offset))
+                if FillValue is not None:
+                    if var.dtype != FillValue.dtype:
+                        mask = variables[par] == 0
+                        if not 'already_warned' in locals():
+                            logging.warning('Data type of variable (%s) and _FillValue (%s) is not the same. Masking 0-values instead' % (var.dtype, FillValue.dtype))
+                            already_warned = True
+                    else:
+                        logging.warning('Masking ' + str(FillValue))
+                        mask = variables[par] == FillValue
+                variables[par] = variables[par]*scale + offset
+                if FillValue is not None:
+                    variables[par][mask] = np.nan
 
             if var.ndim == 4:
                 # Regrid from sigma to z levels
                 if len(np.atleast_1d(indz)) > 1:
                     logging.debug('sigma to z for ' + varname[0])
-                    variables[par] = depth.multi_zslice(
-                        variables[par], z_rho, variables['z'])
+                    if self.precalculate_s2z_coefficients is True:
+                        M = self.sea_floor_depth_below_sea_level.shape[0]
+                        N = self.sea_floor_depth_below_sea_level.shape[1]
+                        O = len(self.z_rho_tot)
+                        if not hasattr(self, 's2z_A'):
+                            logging.info('Calculating sigma2z-coefficients for whole domain')
+                            starttime = datetime.now()
+                            dummyvar = np.ones((O, M, N))
+                            dummy, self.s2z_total = depth.multi_zslice(dummyvar, self.z_rho_tot, self.zlevels)
+                            # Store arrays/coefficients
+                            self.s2z_A = self.s2z_total[0].reshape(len(self.zlevels), M, N)
+                            self.s2z_C = self.s2z_total[1].reshape(len(self.zlevels), M, N)
+                            #self.s2z_I = self.s2z_total[2].reshape(M, N)
+                            self.s2z_kmax = self.s2z_total[3]
+                            del self.s2z_total  # Free memory
+                            logging.info('Time: ' + str(datetime.now() - starttime))
+                        if 'A' not in locals():
+                            logging.info('Re-using sigma2z-coefficients')
+                            # Select relevant subset of full arrays
+                            zle = np.arange(zi1, zi2)  # The relevant depth levels
+                            A = self.s2z_A.copy()  # Awkward subsetting to prevent losing one dimension
+                            A = A[:,:,indx]
+                            A = A[:,indy,:]
+                            A = A[zle,:,:]
+                            C = self.s2z_C.copy()
+                            C = C[:,:,indx]
+                            C = C[:,indy,:]
+                            C = C[zle,:,:]
+                            C = C - C.max() + variables[par].shape[0] - 1
+                            C[C<1] = 1
+                            A = A.reshape(len(zle), len(indx)*len(indy))
+                            C = C.reshape(len(zle), len(indx)*len(indy))
+                            I = np.arange(len(indx)*len(indy))
+                            ## Check
+                            #dummyvar2, s2z = depth.multi_zslice(
+                            #    variables[par].copy(), z_rho.copy(), variables['z'])
+                            #print len(zle), variables[par].shape, 'zle, varshape'
+                            #Ac,Cc,Ic,kmaxc = s2z
+                            #print C, 'C'
+                            #print Cc, 'Cc'
+                            #print C.shape, Cc.shape
+                            #if C.max() != Cc.max():
+                            #    print 'WARNING!!'
+                            #    import sys; sys.exit('stop')
+                            kmax = len(zle)  # Must be checked. Or number of sigma-layers?
+                    if 'A' not in locals():
+                        logging.info('Calculating new sigma2z-coefficients')
+                        variables[par], s2z = depth.multi_zslice(
+                            variables[par], z_rho, variables['z'])
+                        A,C,I,kmax = s2z
+                        # Reshaping to compare with subset of full array
+                        #zle = np.arange(zi1, zi2)
+                        #A = A.reshape(len(zle), len(indx), len(indy))
+                        #C = C.reshape(len(zle), len(indx), len(indy))
+                        #I = I.reshape(len(indx), len(indy))
+                    else:
+                        logging.info('Applying sigma2z-coefficients')
+                        # Re-using sigma2z koefficients:
+                        F = np.asarray(variables[par])
+                        Fshape = F.shape
+                        N = F.shape[0]
+                        M = F.size // N
+                        F = F.reshape((N, M))
+                        R = (1-A)*F[(C-1, I)]+A*F[(C, I)]
+                        variables[par] = R.reshape((kmax,) + Fshape[1:])
+
                     # Nan in input to multi_zslice gives extreme values in output
                     variables[par][variables[par]>1e+9] = np.nan
 
@@ -387,7 +491,10 @@ class Reader(BaseReader):
             if not hasattr(self, 'angle_xi_east'):
                 logging.debug('Reading angle between xi and east...')
                 self.angle_xi_east = self.Dataset.variables['angle'][:]
-            rad = self.angle_xi_east[np.meshgrid(indy, indx)].T
+            if has_xarray is False:
+                rad = self.angle_xi_east[np.meshgrid(indy, indx)].T
+            else:
+                rad = self.angle_xi_east[indy, indx].T
             if 'x_sea_water_velocity' in variables.keys():
                 variables['x_sea_water_velocity'], \
                     variables['y_sea_water_velocity'] = rotate_vectors_angle(

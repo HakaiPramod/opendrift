@@ -77,6 +77,37 @@ class TestReaders(unittest.TestCase):
                          [o.test_data_folder() +
             '2Feb2016_Nordic_sigma_3d/AROME_MetCoOp_00_DEF.nc_20160202_subset'])
 
+    def test_repeated_run(self):
+        o = OceanDrift(loglevel=50)
+        o.set_config('general:basemap_resolution', 'c')
+        o.add_readers_from_list(reader_list)
+        o.seed_elements(lon=14, lat=67.85,
+                        time=datetime(2016, 2, 2, 12))
+        o.run(steps=5)
+        lon1 = o.get_property('lon')[0]
+        # Repeated run with same object
+        o.seed_elements(lon=14, lat=67.85,
+                        time=datetime(2016, 2, 2, 12))
+        o.run(steps=5)
+        lon2 = o.get_property('lon')[0]
+        # Third run, with different config
+        o.seed_elements(lon=14, lat=67.85,
+                        time=datetime(2016, 2, 2, 12),
+                        wind_drift_factor=.1)
+        o.run(steps=5)
+        lon3 = o.get_property('lon')[0]
+        # Fourth run, with different time
+        o.reset()  # Reset is needed due to new start_time
+        o.seed_elements(lon=14, lat=67.85,
+                        time=datetime(2016, 2, 2, 13),
+                        wind_drift_factor=.1)
+        o.run(steps=5)
+        lon4 = o.get_property('lon')[0]
+
+        # Check results
+        self.assertEqual(lon1[-1][0], lon2[-1][0])
+        self.assertNotEqual(lon3[-1][0], lon2[-1][0])
+
     def test_reader_from_url(self):
         readers = reader_from_url(reader_list)
         self.assertIsNone(readers[0])
@@ -230,7 +261,7 @@ class TestReaders(unittest.TestCase):
         time = datetime(2016,2,2,12)
         o.seed_elements(lat=67.85, lon=14, time=time)
         o.run(steps=2)
-        self.assertAlmostEqual(o.elements.lat[0], 67.8791, 3)
+        self.assertAlmostEqual(o.elements.lat[0], 67.8548, 3)
 
     def test_automatic_basemap(self):
         self.assertRaises(ValueError, o.run)
