@@ -121,6 +121,9 @@ class OpenOil3D(OpenDrift3DSimulation, OpenOil):  # Multiple inheritance
                 oil_type = option(%s, default=%s)
                 droplet_diameter_min_subsea = float(min=1e-8, max=1, default=0.0005)
                 droplet_diameter_max_subsea = float(min=1e-8, max=1, default=0.005)
+        [drift]
+            wind_drift_depth = float(min=0, max=10, default=0.1)
+            verticaladvection = boolean(default=False)
         [wave_entrainment]
             droplet_size_distribution = option('Exponential', 'Johansen et al. (2015)', 'Li et al. (2017)', default='Johansen et al. (2015)')
             entrainment_rate = option('Tkalich & Chan (2002)', 'Li et al. (2017)', default='Li et al. (2017)')
@@ -135,14 +138,14 @@ class OpenOil3D(OpenDrift3DSimulation, OpenOil):  # Multiple inheritance
         # Read oil properties from file
         self.oiltype_file = os.path.dirname(os.path.realpath(__file__)) + \
             '/oilprop.dat'
-        oilprop = open(self.oiltype_file)
         oiltypes = []
         linenumbers = []
-        for i, line in enumerate(oilprop.readlines()):
-            if line[0].isalpha():
-                oiltype = line.strip()[:-2].strip()
-                oiltypes.append(oiltype)
-                linenumbers.append(i)
+        with open(self.oiltype_file) as f:
+            for i, line in enumerate(f):
+                if line[0].isalpha():
+                    oiltype = line.strip()[:-2].strip()
+                    oiltypes.append(oiltype)
+                    linenumbers.append(i)
         oiltypes, linenumbers = zip(*sorted(zip(oiltypes, linenumbers)))
         self.oiltypes = oiltypes
         self.oiltypes_linenumbers = linenumbers
@@ -504,7 +507,7 @@ class OpenOil3D(OpenDrift3DSimulation, OpenOil):  # Multiple inheritance
         # Johansen O, Reed M, Bodsberg NR, Natural dispersion revisited
         # DOI: 10.1016/j.marpolbul.2015.02.026
         # requires oil film thickness
-        if not hasattr(self, 'droplet_spectrum_pdf'):
+        if not hasattr(self, 'droplet_spectrum_pdf') or self.get_config('processes:update_oilfilm_thickness') is True:
             # Generate droplet spectrum as in Johansen et al. (2015)
             logging.debug('Generating wave breaking droplet size spectrum')
             dmax = self.get_config('turbulentmixing:droplet_diameter_max_wavebreaking')
@@ -553,6 +556,9 @@ class OpenOil3D(OpenDrift3DSimulation, OpenOil):  # Multiple inheritance
     def update(self):
         """Update positions and properties of oil particles."""
 
+        if self.get_config('processes:update_oilfilm_thickness') is True:
+            self.update_surface_oilfilm_thickness()
+
         # Oil weathering (inherited from OpenOil)
         self.oil_weathering()
 
@@ -568,3 +574,4 @@ class OpenOil3D(OpenDrift3DSimulation, OpenOil):  # Multiple inheritance
 
         # Horizontal advection (inherited from OpenOil)
         self.advect_oil()
+
