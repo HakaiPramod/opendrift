@@ -25,7 +25,11 @@ try:
     has_xarray = True
 except:
     has_xarray = False
+<<<<<<< HEAD
 has_xarray = False  # Temporary disabled
+=======
+#has_xarray = False  # Temporary disabled
+>>>>>>> upstream/master
 
 from opendrift.readers.basereader import BaseReader, vector_pairs_xy
 from opendrift.readers.roppy import depth
@@ -69,6 +73,11 @@ class Reader(BaseReader):
             -250, -300, -400, -500, -600, -700, -800, -900, -1000, -1500,
             -2000, -2500, -3000, -3500, -4000, -4500, -5000, -5500, -6000,
             -6500, -7000, -7500, -8000])
+<<<<<<< HEAD
+=======
+
+        gls_param = ['gls_cmu0', 'gls_p', 'gls_m', 'gls_n']
+>>>>>>> upstream/master
 
         filestr = str(filename)
         if name is None:
@@ -81,8 +90,24 @@ class Reader(BaseReader):
             logging.info('Opening dataset: ' + filestr)
             if ('*' in filestr) or ('?' in filestr) or ('[' in filestr):
                 logging.info('Opening files with MFDataset')
+<<<<<<< HEAD
                 if has_xarray is True:
                     self.Dataset = xr.open_mfdataset(filename)
+=======
+                def drop_non_essential_vars_pop(ds):
+                    dropvars = [v for v in ds.variables if v not in
+                                list(self.ROMS_variable_mapping.keys()) + gls_param +
+                                ['ocean_time', 's_rho', 'Cs_r', 'hc', 'angle']
+                                and v[0:3] not in ['lon', 'lat', 'mas']]
+                    logging.debug('Dropping variables: %s' % dropvars)
+                    ds = ds.drop(dropvars)
+                    return ds
+                if has_xarray is True:
+                    self.Dataset = xr.open_mfdataset(filename,
+                        chunks={'ocean_time': 1}, concat_dim='ocean_time',
+                        preprocess=drop_non_essential_vars_pop,
+                        data_vars='minimal', coords='minimal')
+>>>>>>> upstream/master
                 else:
                     self.Dataset = MFDataset(filename)
             else:
@@ -148,9 +173,9 @@ class Reader(BaseReader):
 
         try:  # Check for GLS parameters (diffusivity)
             self.gls_parameters = {}
-            for gls_param in ['gls_cmu0', 'gls_p', 'gls_m', 'gls_n']:
-                self.gls_parameters[gls_param] = \
-                    self.Dataset.variables[gls_param][()]
+            for gls_par in gls_param:
+                self.gls_parameters[gls_par] = \
+                    self.Dataset.variables[gls_par][()]
             logging.info('Read GLS parameters from file.')
         except Exception as e:
             logging.info(e)
@@ -212,6 +237,7 @@ class Reader(BaseReader):
     def get_variables(self, requested_variables, time=None,
                       x=None, y=None, z=None, block=False):
 
+        start_time = datetime.now()
         requested_variables, time, x, y, z, outside = self.check_arguments(
             requested_variables, time, x, y, z)
 
@@ -299,11 +325,13 @@ class Reader(BaseReader):
             variables['z'] = np.array(self.zlevels[zi1:zi2])
 
         #read_masks = {}  # To store maskes for various grids
+        mask_values = {}
         for par in requested_variables:
             varname = [name for name, cf in
                        self.ROMS_variable_mapping.items() if cf == par]
             var = self.Dataset.variables[varname[0]]
 
+<<<<<<< HEAD
             if has_xarray is not True:
                 # Automatic masking may lead to trouble for ROMS files
                 # with valid_min/max, _Fill_value or missing_value
@@ -324,6 +352,19 @@ class Reader(BaseReader):
                     offset = 0
 
             if var.ndim == 2:
+=======
+            if par == 'land_binary_mask':
+                if not hasattr(self, 'land_binary_mask'):
+                    # Read landmask for whole domain, for later re-use
+                    self.land_binary_mask = \
+                        1 - self.Dataset.variables['mask_rho'][:]
+                if has_xarray is False:
+                    indxgrid, indygrid = np.meshgrid(indx, indy)
+                    variables[par] = self.land_binary_mask[indygrid, indxgrid]
+                else:
+                    variables[par] = self.land_binary_mask[indy, indx]
+            elif var.ndim == 2:
+>>>>>>> upstream/master
                 variables[par] = var[indy, indx]
             elif var.ndim == 3:
                 variables[par] = var[indxTime, indy, indx]
@@ -333,6 +374,7 @@ class Reader(BaseReader):
                 raise Exception('Wrong dimension of variable: ' +
                                 self.variable_mapping[par])
 
+<<<<<<< HEAD
             if has_xarray is False:
                 # Manual scaling, offsetting and masking due to issue with ROMS files
                 logging.debug('Manually masking %s, FillValue %s, scale %s, offset %s' % 
@@ -349,6 +391,40 @@ class Reader(BaseReader):
                 variables[par] = variables[par]*scale + offset
                 if FillValue is not None:
                     variables[par][mask] = np.nan
+=======
+            variables[par] = np.asarray(variables[par])  # If Xarray
+            start = datetime.now()
+
+            if par not in mask_values:
+                if has_xarray is False:
+                    indxgrid, indygrid = np.meshgrid(indx, indy)
+                else:
+                    indxgrid = indx
+                    indygrid = indy
+                if par == 'x_sea_water_velocity':
+                    if not hasattr(self, 'mask_u'):
+                        self.mask_u = self.Dataset.variables['mask_u'][:]
+                    mask = self.mask_u[indygrid, indxgrid]
+                elif par == 'y_sea_water_velocity':
+                    if not hasattr(self, 'mask_v'):
+                        self.mask_v = self.Dataset.variables['mask_v'][:]
+                    mask = self.mask_v[indygrid, indxgrid]
+                else:
+                    if not hasattr(self, 'mask_rho'):
+                        # For ROMS-Agrif this must perhaps be mask_psi?
+                        self.mask_rho = self.Dataset.variables['mask_rho'][:]
+                    mask = self.mask_rho[indygrid, indxgrid]
+                if has_xarray is True:
+                    mask = np.asarray(mask)
+                if mask.min() == 0 and par != 'land_binary_mask':
+                    first_mask_point = np.where(mask.ravel()==0)[0][0]
+                    if variables[par].ndim == 3:
+                        upper = variables[par][0,:,:]
+                    else:
+                        upper = variables[par]
+                    mask_values[par] = upper.ravel()[first_mask_point]
+                    variables[par][variables[par]==mask_values[par]] = np.nan
+>>>>>>> upstream/master
 
             if var.ndim == 4:
                 # Regrid from sigma to z levels
@@ -492,9 +568,15 @@ class Reader(BaseReader):
                 logging.debug('Reading angle between xi and east...')
                 self.angle_xi_east = self.Dataset.variables['angle'][:]
             if has_xarray is False:
+<<<<<<< HEAD
                 rad = self.angle_xi_east[np.meshgrid(indy, indx)].T
             else:
                 rad = self.angle_xi_east[indy, indx].T
+=======
+                rad = self.angle_xi_east[tuple(np.meshgrid(indy, indx))].T
+            else:
+                rad = self.angle_xi_east[indy, indx]
+>>>>>>> upstream/master
             if 'x_sea_water_velocity' in variables.keys():
                 variables['x_sea_water_velocity'], \
                     variables['y_sea_water_velocity'] = rotate_vectors_angle(
@@ -511,14 +593,12 @@ class Reader(BaseReader):
                         variables['x_wind'],
                         variables['y_wind'], rad)
 
-        if 'land_binary_mask' in requested_variables:
-            variables['land_binary_mask'] = \
-                1 - variables['land_binary_mask']
-
         # Masking NaN
         for var in requested_variables:
             variables[var] = np.ma.masked_invalid(variables[var])
         
+        logging.debug('Time for ROMS native reader: ' + str(datetime.now()-start_time))
+
         return variables
 
 

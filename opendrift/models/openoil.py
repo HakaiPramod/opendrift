@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 from opendrift.models.basemodel import OpenDriftSimulation
 from opendrift.elements import LagrangianArray
 import opendrift.models.noaa_oil_weathering as noaa
+from opendrift.readers.basereader import pyproj
 
 try:
     from itertools import izip as zip
@@ -117,6 +118,10 @@ class OpenOil(OpenDriftSimulation):
             dispersion = boolean(default=True)
             evaporation = boolean(default=True)
             emulsification = boolean(default=True)
+<<<<<<< HEAD
+=======
+            update_oilfilm_thickness = boolean(default=False)
+>>>>>>> upstream/master
         [drift]
             current_uncertainty = float(min=0, max=5, default=0.05)
             wind_uncertainty = float(min=0, max=5, default=.5)
@@ -171,14 +176,14 @@ class OpenOil(OpenDriftSimulation):
             # Read oil properties from file
             self.oiltype_file = os.path.dirname(os.path.realpath(__file__)) + \
                 '/oilprop.dat'
-            oilprop = open(self.oiltype_file, 'r', encoding='utf-8')
             oiltypes = []
             linenumbers = []
-            for i, line in enumerate(oilprop.readlines()):
-                if line[0].isalpha():
-                    oiltype = line.strip()[:-2].strip()
-                    oiltypes.append(oiltype)
-                    linenumbers.append(i)
+            with open(self.oiltype_file) as f:
+                for i, line in enumerate(f):
+                    if line[0].isalpha():
+                        oiltype = line.strip()[:-2].strip()
+                        oiltypes.append(oiltype)
+                        linenumbers.append(i)
             oiltypes, linenumbers = zip(*sorted(zip(oiltypes, linenumbers)))
             self.oiltypes = oiltypes
             self.oiltypes_linenumbers = linenumbers
@@ -196,6 +201,56 @@ class OpenOil(OpenDriftSimulation):
         # Overriding with specific configspec
         self._add_configstring(self.configspec)
 
+<<<<<<< HEAD
+=======
+    def update_surface_oilfilm_thickness(self):
+        '''The mass of oil is summed within a grid of 20x20
+        cells covering the oil at a given time. Each oil particle
+        within each cell is given a film thickness as the amount of
+        oil divided by the cell area.
+        '''
+        from scipy.stats import binned_statistic_2d
+        surface = np.where(self.elements.z == 0)[0]
+        if len(surface) == 0:
+            print('No oil at surface, no film thickness to update')
+            return
+        print('Updating oil film thickness for %s of %s elements at surface' % (len(surface), self.num_elements_active()))
+        meanlon = self.elements.lon[surface].mean()
+        meanlat = self.elements.lat[surface].mean()
+        # Using stereographic coordinates to get regular X and Y
+        psproj = pyproj.Proj(
+            '+proj=stere +lat_0=%s +lat_ts=%s +lon_0=%s' %
+            (meanlat, meanlat, meanlon)) 
+        X,Y = psproj(self.elements.lon[surface], self.elements.lat[surface])
+        mass_bin, x_edge, y_edge, binnumber = binned_statistic_2d(
+            X, Y, self.elements.mass_oil[surface],
+            expand_binnumbers=True,
+            statistic='sum', bins=100)
+        bin_area = (x_edge[1]-x_edge[0])*(y_edge[1]-y_edge[0])
+        oil_density = 1000  # ok approximation here
+        film_thickness = (mass_bin/oil_density)/bin_area
+        # Postulating min and max film thickness
+        max_thickness = 0.01  # 1 cm
+        min_thickness = 1e-9  # 1 nanometer
+        if film_thickness.max() > max_thickness:
+            print('Warning: decreasing thickness to %sm for %s of %s bins' % (max_thickness, np.sum(film_thickness>max_thickness), film_thickness.size))
+            film_thickness[film_thickness>max_thickness] = max_thickness
+        num_too_thin = np.sum((film_thickness<min_thickness) & (film_thickness>0))
+        if num_too_thin > 0:
+            print('Warning: increasing thickness to %sm for %s of %s bins' % (min_thickness, num_too_thin, film_thickness.size))
+            film_thickness[film_thickness<min_thickness] = min_thickness
+
+        # https://github.com/scipy/scipy/issues/7010
+        binnumber = binnumber - 1
+
+        bx = binnumber[0,:]
+        by = binnumber[1,:]
+        # Update thickness
+        self.elements.oil_film_thickness[surface] = self.elements.oil_film_thickness[surface]*np.nan
+        self.elements.oil_film_thickness[surface] = \
+            film_thickness[bx, by]
+
+>>>>>>> upstream/master
     def evaporate(self):
         if self.get_config('processes:evaporation') is True:
             logging.debug('   Calculating: evaporation')
@@ -468,6 +523,10 @@ class OpenOil(OpenDriftSimulation):
         surface = np.where(self.elements.z == 0)[0]  # of active elements
         if len(surface) == 0:
             logging.debug('All elements submerged, no evaporation')
+            return
+        if self.elements.age_seconds[surface].min() > 3600*24:
+            logging.debug('All surface oil elements older than 24 hours, ' +
+                          'skipping further evaporation.')
             return
         surfaceID = self.elements.ID[surface] - 1    # of any elements
         # Area for each element, repeated for each component
@@ -753,6 +812,7 @@ class OpenOil(OpenDriftSimulation):
             tref.append(line[0])
             fref.append(line[1])
             wmax.append(line[3])
+        oilfile.close()
         self.oil_data['tref'] = np.array(tref, dtype='float')*3600.
         self.oil_data['fref'] = np.array(fref, dtype='float')*.01
         self.oil_data['wmax'] = np.array(wmax, dtype='float')
@@ -903,6 +963,7 @@ class OpenOil(OpenDriftSimulation):
 
         import gdal
         import ogr
+        import osr
 
         if not 'time' is kwargs:
             try:  # get time from filename
@@ -948,12 +1009,20 @@ class OpenOil(OpenDriftSimulation):
 
         total_area = np.zeros(len(categories))
         layers = [0]*len(categories)
+
+        src_srs = osr.SpatialReference()
+        src_srs.ImportFromEPSG(4269)
+        tgt_srs = osr.SpatialReference()
+        tgt_srs.ImportFromEPSG(3857)
+        transform = osr.CoordinateTransformation(src_srs, tgt_srs)
         for cat in categories:
             memshapename = filename + '%i.shp' % cat
             layers[cat-1] = mem_vector_layers[cat-1]
             areas = np.zeros(layers[cat-1].GetFeatureCount())
             for i, feature in enumerate(layers[cat-1]):
-                areas[i] = feature.GetGeometryRef().GetArea()
+                geom = feature.GetGeometryRef()
+                geom.Transform(transform)  # To get area in m2
+                areas[i] = geom.GetArea()
             # Delete largest polygon, which is outer border
             outer = np.where(areas==max(areas))[0]
             areas[outer] = 0
@@ -965,8 +1034,11 @@ class OpenOil(OpenDriftSimulation):
         areas_weighted = total_area*thickness_microns
         numbers = number*areas_weighted/np.sum(areas_weighted)
         numbers = np.round(numbers).astype(int)
+        oil_density = 1000
+        mass_oil = (total_area*thickness_microns/1e6)*oil_density
 
         for i, num in enumerate(numbers):
             self.seed_from_shapefile([mem_vector_layers[i]],
                 oil_film_thickness=thickness_microns[i]/1000000.,
+                mass_oil=mass_oil[i]/num,
                 number=num, time=time, *args, **kwargs)

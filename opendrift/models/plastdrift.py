@@ -70,6 +70,10 @@ class PlastDrift(OceanDrift3D):
         [drift]
             verticaladvection = boolean(default=True)
             use_tabularised_stokes_drift = boolean(default=True)
+<<<<<<< HEAD
+=======
+            wind_drift_depth = float(min=0, max=10, default=0.1)
+>>>>>>> upstream/master
         [turbulentmixing]
             diffusivitymodel = option('environment', 'stepfunction', 'windspeed_Sundby1983', 'windspeed_Large1994', 'gls_tke', default='windspeed_Large1994')
         '''
@@ -94,6 +98,12 @@ class PlastDrift(OceanDrift3D):
         # Advect particles due to Stokes drift
         self.stokes_drift()
 
+<<<<<<< HEAD
+=======
+        # Advect particles due to wind-induced shear near surface
+        self.advect_wind()
+
+>>>>>>> upstream/master
         # We set z to 0 for performance (need only read
         # surface current), but store it as 'depth' for analysis
         self.elements.depth = self.elements.z
