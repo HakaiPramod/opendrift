@@ -2547,7 +2547,10 @@ class OpenDriftSimulation(PhysicsMethods):
                   skip=5, scale=10, color=False, clabel=None,
                   colorbar=True, cmap=None, density=False, show_elements=True,
                   density_pixelsize_m=1000, unitfactor=1, lcs=None,
+<<<<<<< HEAD
+=======
                   surface_only=False,
+>>>>>>> upstream/master
                   legend=None, legend_loc='best', fps=10):
         """Animate last run."""
 
@@ -3630,7 +3633,10 @@ class OpenDriftSimulation(PhysicsMethods):
                 try:
                     try:
                         # For perfect quality, but larger file size
+<<<<<<< HEAD
+=======
                         #FFwriter=animation.FFMpegWriter(fps=fps, extra_args=['-vcodec', 'libx264'])
+>>>>>>> upstream/master
                         FFwriter=animation.FFMpegWriter(fps=fps,
                             codec='libx264', bitrate=1800,
                             extra_args=['-profile:v', 'baseline',
@@ -3695,7 +3701,11 @@ class OpenDriftSimulation(PhysicsMethods):
             if ALCS is True:
                 self.reset()
                 self.seed_elements(lons.ravel(), lats.ravel(),
+<<<<<<< HEAD
+                                   time=t)
+=======
                                    time=t+duration)
+>>>>>>> upstream/master
                 self.run(duration=duration, time_step=-time_step)
                 b_x1, b_y1 = reader.lonlat2xy(
                     self.history['lon'].T[-1].reshape(X.shape),

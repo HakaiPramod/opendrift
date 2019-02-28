@@ -118,7 +118,10 @@ class OpenOil(OpenDriftSimulation):
             dispersion = boolean(default=True)
             evaporation = boolean(default=True)
             emulsification = boolean(default=True)
+<<<<<<< HEAD
+=======
             update_oilfilm_thickness = boolean(default=False)
+>>>>>>> upstream/master
         [drift]
             current_uncertainty = float(min=0, max=5, default=0.05)
             wind_uncertainty = float(min=0, max=5, default=.5)
@@ -198,6 +201,8 @@ class OpenOil(OpenDriftSimulation):
         # Overriding with specific configspec
         self._add_configstring(self.configspec)
 
+<<<<<<< HEAD
+=======
     def update_surface_oilfilm_thickness(self):
         '''The mass of oil is summed within a grid of 20x20
         cells covering the oil at a given time. Each oil particle
@@ -245,6 +250,7 @@ class OpenOil(OpenDriftSimulation):
         self.elements.oil_film_thickness[surface] = \
             film_thickness[bx, by]
 
+>>>>>>> upstream/master
     def evaporate(self):
         if self.get_config('processes:evaporation') is True:
             logging.debug('   Calculating: evaporation')
